@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+outputs/
+*.log
+
+.env
+.env.*
+
+snuaichallenge_data/
+datas/
+*.zip
+*.pt
+*.pth
+*.safetensors
