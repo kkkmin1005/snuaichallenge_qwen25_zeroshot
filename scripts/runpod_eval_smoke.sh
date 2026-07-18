@@ -9,6 +9,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
+python3 scripts/check_env.py
 
 python3 -m src.qwen25_zeroshot \
   --mode eval \

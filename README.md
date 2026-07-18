@@ -14,6 +14,19 @@ cd /home/kangmin/snuaichallenge_qwen25_zeroshot
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python3 scripts/check_env.py
+```
+
+The pinned GPU stack is aligned to the challenge server's CUDA 12.4 target:
+
+```text
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+torchaudio==2.6.0+cu124
+transformers==4.49.0
+accelerate==1.4.0
+bitsandbytes==0.46.0
+qwen-vl-utils[decord]==0.0.8
 ```
 
 ## Quick Validation Smoke Test
