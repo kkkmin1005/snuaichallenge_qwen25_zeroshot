@@ -716,7 +716,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report-top-k", type=int, default=5)
     parser.add_argument("--load-in-4bit", action="store_true")
     parser.add_argument("--device-map", default="auto")
-    parser.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
+    parser.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="float16")
     parser.add_argument("--attn-implementation", default=None)
     parser.add_argument("--min-pixels", type=int)
     parser.add_argument("--max-pixels", type=int)
