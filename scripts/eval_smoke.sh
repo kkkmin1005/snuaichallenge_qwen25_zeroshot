@@ -5,7 +5,8 @@ cd "$(dirname "$0")/.."
 
 python3 -m src.qwen25_zeroshot \
   --mode eval \
-  --load-in-4bit \
+  --prediction-method generate \
   --max-rows 20 \
-  --output-jsonl outputs/qwen25_val_20.jsonl \
-  --summary-json outputs/qwen25_val_20_summary.json
+  --max-pixels 200704 \
+  --output-jsonl outputs/qwen25_32b_awq_generate_val_20.jsonl \
+  --summary-json outputs/qwen25_32b_awq_generate_val_20_summary.json

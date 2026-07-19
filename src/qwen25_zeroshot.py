@@ -23,6 +23,7 @@ from transformers import AutoProcessor, BitsAndBytesConfig, Qwen2_5_VLForConditi
 
 
 PERMUTATIONS: list[list[int]] = [list(perm) for perm in permutations([1, 2, 3, 4])]
+DEFAULT_MODEL_ID = "Qwen/Qwen2.5-VL-32B-Instruct-AWQ"
 DEFAULT_DATA_ROOT = Path(
     os.environ.get("SNUAI_DATA_ROOT", "/home/kangmin/snuaichallenge/snuaichallenge_data")
 )
@@ -49,6 +50,12 @@ def main() -> None:
 
 
 def load_model(args: argparse.Namespace):
+    if args.load_in_4bit and "awq" in args.model_id.lower():
+        raise ValueError(
+            "Do not pass --load-in-4bit with AWQ models. "
+            "AWQ checkpoints are already quantized; remove --load-in-4bit."
+        )
+
     processor_kwargs: dict[str, Any] = {}
     if args.min_pixels is not None:
         processor_kwargs["min_pixels"] = args.min_pixels
@@ -409,6 +416,7 @@ def update_stats(stats: dict[str, int], correct: bool, no_ordering: bool, parse_
 def summarize(args: argparse.Namespace, stats: dict[str, int]) -> dict[str, Any]:
     return {
         "model_id": args.model_id,
+        "prediction_method": args.prediction_method,
         "train_csv": str(args.train_csv),
         "val_ratio": args.val_ratio,
         "seed": args.seed,
@@ -685,7 +693,7 @@ def dtype_from_name(name: str):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["eval", "infer"], required=True)
-    parser.add_argument("--model-id", default="Qwen/Qwen2.5-VL-7B-Instruct")
+    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     parser.add_argument("--train-csv", type=Path, default=DEFAULT_DATA_ROOT / "train.csv")
     parser.add_argument("--test-csv", type=Path, default=DEFAULT_DATA_ROOT / "test.csv")
@@ -703,7 +711,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-rows", type=int)
     parser.add_argument("--max-new-tokens", type=int, default=48)
-    parser.add_argument("--prediction-method", choices=["score", "generate"], default="score")
+    parser.add_argument("--prediction-method", choices=["score", "generate"], default="generate")
     parser.add_argument("--candidate-batch-size", type=int, default=1)
     parser.add_argument("--report-top-k", type=int, default=5)
     parser.add_argument("--load-in-4bit", action="store_true")
