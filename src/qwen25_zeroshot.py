@@ -313,18 +313,32 @@ def build_messages(image_paths: list[Path], sentence: str) -> list[dict[str, Any
         content.append({"type": "image", "image": str(path)})
 
     instruction = f"""
-The four images above are shuffled frames named Input_1, Input_2, Input_3, and Input_4.
-The input labels are only identifiers; they are not the chronological order.
+You are given four shuffled frames from the same short sequence.
+
+Input_1, Input_2, Input_3, and Input_4 are only image identifiers.
+They are not the original order.
 
 Text:
 {sentence}
 
-Select the consecutive image order that best matches the text from earliest to latest.
-Return the input label numbers in chronological order.
+Choose the chronological order of the four images from earliest to latest.
 
-Output exactly one list in this format: [a, b, c, d]
+To decide, internally compare the images using visual evidence:
+- how people, animals, or objects move,
+- how poses or actions change,
+- how object positions change,
+- how the scene state changes from before to after,
+- which order forms the most continuous story matching the text.
+
+Do not rank individual images by text similarity.
+Find the sequence that best matches the text as a continuous event.
+
+Rules:
 Use each number 1, 2, 3, and 4 exactly once.
-Do not output JSON, explanations, or any other text.
+Do not assume [1, 2, 3, 4].
+Output only one Python-style list.
+
+Final answer:
 """.strip()
     content.append({"type": "text", "text": instruction})
     return [{"role": "user", "content": content}]
@@ -710,7 +724,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-rows", type=int)
-    parser.add_argument("--max-new-tokens", type=int, default=48)
+    parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--prediction-method", choices=["score", "generate"], default="generate")
     parser.add_argument("--candidate-batch-size", type=int, default=1)
     parser.add_argument("--report-top-k", type=int, default=5)
