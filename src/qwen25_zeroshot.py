@@ -323,7 +323,7 @@ Text:
 
 Choose the chronological order of the four images from earliest to latest.
 
-To decide, internally compare the images using visual evidence:
+Think silently. Compare the images using visual evidence:
 - how people, animals, or objects move,
 - how poses or actions change,
 - how object positions change,
@@ -336,7 +336,9 @@ Find the sequence that best matches the text as a continuous event.
 Rules:
 Use each number 1, 2, 3, and 4 exactly once.
 Do not assume [1, 2, 3, 4].
-Output only one Python-style list.
+Do not write analysis, reasoning, markdown, code fences, or explanations.
+The first character of your response must be "[" and the last character must be "]".
+Output only one Python-style list, such as [2, 4, 1, 3].
 
 Final answer:
 """.strip()
@@ -724,7 +726,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-rows", type=int)
-    parser.add_argument("--max-new-tokens", type=int, default=16)
+    parser.add_argument("--max-new-tokens", type=int, default=32)
     parser.add_argument("--prediction-method", choices=["score", "generate"], default="generate")
     parser.add_argument("--candidate-batch-size", type=int, default=1)
     parser.add_argument("--report-top-k", type=int, default=5)
