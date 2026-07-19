@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
+import html
 import json
 import os
 import random
 import re
+from collections import Counter
 from dataclasses import dataclass
 from itertools import permutations
 from pathlib import Path
@@ -118,6 +120,12 @@ def run_eval(args: argparse.Namespace, processor, model) -> None:
     summary_path = Path(args.summary_json)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_eval_reports(
+        output_path,
+        summary,
+        report_path(args.report_csv, output_path, ".csv"),
+        report_path(args.report_html, output_path, ".html"),
+    )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
@@ -216,11 +224,11 @@ The sentence describes the correct chronological story:
 {sentence}
 
 Choose the chronological order from earliest to latest.
+The input order is randomized. Do not choose [1, 2, 3, 4] unless the visual evidence supports it.
 The answer must be exactly one of these 24 one-based permutations:
 {candidates}
 
-Return only JSON in this exact format:
-{{"answer":[1,2,3,4]}}
+Return only JSON with one key named "answer". The value must be your chosen permutation.
 """.strip()
     content.append({"type": "text", "text": instruction})
     return [{"role": "user", "content": content}]
@@ -327,6 +335,214 @@ def summarize(args: argparse.Namespace, stats: dict[str, int]) -> dict[str, Any]
     }
 
 
+def write_eval_reports(
+    jsonl_path: Path,
+    summary: dict[str, Any],
+    csv_path: Path,
+    html_path: Path,
+) -> None:
+    records = read_jsonl(jsonl_path)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    write_eval_csv(records, csv_path)
+    write_eval_html(records, summary, html_path)
+
+
+def report_path(value: str | None, output_jsonl: Path, suffix: str) -> Path:
+    if value:
+        return Path(value)
+    return output_jsonl.with_name(f"{output_jsonl.stem}_report{suffix}")
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def write_eval_csv(records: list[dict[str, Any]], path: Path) -> None:
+    fieldnames = [
+        "n",
+        "index",
+        "id",
+        "no_ordering",
+        "true_answer",
+        "pred_answer",
+        "correct",
+        "raw_text",
+        "sentence",
+    ]
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for n, record in enumerate(records, start=1):
+            writer.writerow(
+                {
+                    "n": n,
+                    "index": record["index"],
+                    "id": record["id"],
+                    "no_ordering": record["no_ordering"],
+                    "true_answer": format_answer(record["true_answer"]),
+                    "pred_answer": format_answer(record["pred_answer"]),
+                    "correct": record["correct"],
+                    "raw_text": record["raw_text"],
+                    "sentence": record["sentence"],
+                }
+            )
+
+
+def write_eval_html(records: list[dict[str, Any]], summary: dict[str, Any], path: Path) -> None:
+    pred_counts = Counter(format_answer(record["pred_answer"]) for record in records)
+    true_counts = Counter(format_answer(record["true_answer"]) for record in records)
+
+    rows = []
+    for n, record in enumerate(records, start=1):
+        klass = "ok" if record["correct"] else "bad"
+        rows.append(
+            "<tr>"
+            f"<td>{n}</td>"
+            f"<td>{escape_text(record['id'])}</td>"
+            f"<td>{record['no_ordering']}</td>"
+            f"<td>{escape_text(format_answer(record['true_answer']))}</td>"
+            f"<td>{escape_text(format_answer(record['pred_answer']))}</td>"
+            f"<td><span class='{klass}'>{record['correct']}</span></td>"
+            f"<td>{escape_text(record['raw_text'])}</td>"
+            f"<td>{escape_text(record['sentence'])}</td>"
+            "</tr>"
+        )
+
+    pred_rows = counter_rows(pred_counts, len(records))
+    true_rows = counter_rows(true_counts, len(records))
+    doc = f"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen2.5-VL Eval Report</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 24px;
+      color: #202124;
+      background: #f7f8fa;
+    }}
+    h1, h2 {{ margin: 0 0 12px; }}
+    section {{ margin: 0 0 24px; }}
+    .metrics {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }}
+    .metric {{
+      background: white;
+      border: 1px solid #d9dee7;
+      border-radius: 8px;
+      padding: 12px;
+    }}
+    .label {{ color: #5f6368; font-size: 13px; }}
+    .value {{ font-size: 22px; font-weight: 700; margin-top: 4px; }}
+    table {{
+      border-collapse: collapse;
+      width: 100%;
+      background: white;
+      border: 1px solid #d9dee7;
+    }}
+    th, td {{
+      border-bottom: 1px solid #e7ebf0;
+      padding: 8px;
+      vertical-align: top;
+      text-align: left;
+      font-size: 13px;
+    }}
+    th {{ background: #eef2f7; position: sticky; top: 0; }}
+    .ok {{ color: #137333; font-weight: 700; }}
+    .bad {{ color: #b3261e; font-weight: 700; }}
+    .wide {{ overflow-x: auto; }}
+    .sentence {{ max-width: 520px; }}
+  </style>
+</head>
+<body>
+  <h1>Qwen2.5-VL Eval Report</h1>
+  <section class="metrics">
+    {metric_card("Total", summary.get("total"))}
+    {metric_card("Correct", summary.get("correct"))}
+    {metric_card("Accuracy", percent(summary.get("accuracy")))}
+    {metric_card("Parse Error Rate", percent(summary.get("parse_error_rate")))}
+    {metric_card("No Ordering Accuracy", percent(summary.get("no_ordering_accuracy")))}
+    {metric_card("Ordered Accuracy", percent(summary.get("ordered_accuracy")))}
+  </section>
+  <section>
+    <h2>Prediction Distribution</h2>
+    <div class="wide">
+      <table>
+        <thead><tr><th>Predicted Answer</th><th>Count</th><th>Rate</th></tr></thead>
+        <tbody>{pred_rows}</tbody>
+      </table>
+    </div>
+  </section>
+  <section>
+    <h2>True Distribution</h2>
+    <div class="wide">
+      <table>
+        <thead><tr><th>True Answer</th><th>Count</th><th>Rate</th></tr></thead>
+        <tbody>{true_rows}</tbody>
+      </table>
+    </div>
+  </section>
+  <section>
+    <h2>Samples</h2>
+    <div class="wide">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Id</th><th>No Ordering</th><th>True</th><th>Pred</th>
+            <th>Correct</th><th>Raw Output</th><th class="sentence">Sentence</th>
+          </tr>
+        </thead>
+        <tbody>{"".join(rows)}</tbody>
+      </table>
+    </div>
+  </section>
+</body>
+</html>
+"""
+    path.write_text(doc, encoding="utf-8")
+
+
+def counter_rows(counter: Counter[str], total: int) -> str:
+    rows = []
+    for answer, count in counter.most_common():
+        rows.append(
+            "<tr>"
+            f"<td>{escape_text(answer)}</td>"
+            f"<td>{count}</td>"
+            f"<td>{percent(safe_div(count, total))}</td>"
+            "</tr>"
+        )
+    return "".join(rows)
+
+
+def metric_card(label: str, value: object) -> str:
+    return (
+        "<div class='metric'>"
+        f"<div class='label'>{escape_text(label)}</div>"
+        f"<div class='value'>{escape_text(value)}</div>"
+        "</div>"
+    )
+
+
+def percent(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.2%}"
+
+
+def escape_text(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
 def safe_div(num: int, den: int) -> float | None:
     if den == 0:
         return None
@@ -370,6 +586,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-csv", type=Path, default=DEFAULT_DATA_ROOT / "test.csv")
     parser.add_argument("--output-jsonl", default="outputs/qwen25_outputs.jsonl")
     parser.add_argument("--summary-json", default="outputs/qwen25_summary.json")
+    parser.add_argument("--report-csv")
+    parser.add_argument("--report-html")
     parser.add_argument("--output-csv", default="outputs/qwen25_submission.csv")
     parser.add_argument("--id-col", default="Id")
     parser.add_argument("--frame-cols", nargs=4, default=["Input_1", "Input_2", "Input_3", "Input_4"])
