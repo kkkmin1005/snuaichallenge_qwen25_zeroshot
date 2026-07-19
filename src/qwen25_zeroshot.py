@@ -309,22 +309,22 @@ def candidate_mean_nll(logits: torch.Tensor, labels: torch.Tensor) -> tuple[list
 def build_messages(image_paths: list[Path], sentence: str) -> list[dict[str, Any]]:
     content: list[dict[str, Any]] = []
     for idx, path in enumerate(image_paths, start=1):
+        content.append({"type": "text", "text": f"Input_{idx}:"})
         content.append({"type": "image", "image": str(path)})
-        content.append({"type": "text", "text": f"Image {idx}: Input_{idx}"})
 
-    candidates = "\n".join(format_answer(perm) for perm in PERMUTATIONS)
     instruction = f"""
-You are solving a four-frame temporal ordering task.
-The four images are shuffled video frames named Input_1, Input_2, Input_3, and Input_4.
-The sentence describes the correct chronological story:
+The four images above are shuffled frames named Input_1, Input_2, Input_3, and Input_4.
+The input labels are only identifiers; they are not the chronological order.
+
+Text:
 {sentence}
 
-Choose the chronological order from earliest to latest.
-The input order is randomized. Do not choose [1, 2, 3, 4] unless the visual evidence supports it.
-The answer must be exactly one of these 24 one-based permutations:
-{candidates}
+Select the consecutive image order that best matches the text from earliest to latest.
+Return the input label numbers in chronological order.
 
-Return only JSON with one key named "answer". The value must be your chosen permutation.
+Output exactly one list in this format: [a, b, c, d]
+Use each number 1, 2, 3, and 4 exactly once.
+Do not output JSON, explanations, or any other text.
 """.strip()
     content.append({"type": "text", "text": instruction})
     return [{"role": "user", "content": content}]
@@ -357,7 +357,7 @@ def parse_jsonish(text: str) -> Any:
 
 def first_permutation(text: str) -> list[int] | None:
     nums = [int(match) for match in re.findall(r"\b[1-4]\b", text)]
-    for start in range(0, max(0, len(nums) - 3)):
+    for start in range(0, max(0, len(nums) - 3) + 1):
         candidate = nums[start : start + 4]
         if sorted(candidate) == [1, 2, 3, 4]:
             return candidate
@@ -660,7 +660,7 @@ def format_answer(answer: list[int]) -> str:
 
 
 def candidate_answer_text(answer: list[int]) -> str:
-    return '{"answer":' + format_answer(answer).replace(" ", "") + "}"
+    return format_answer(answer).replace(" ", "")
 
 
 def format_candidate_scores(candidate_scores: list[dict[str, object]]) -> str:
