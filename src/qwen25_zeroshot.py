@@ -16,6 +16,7 @@ from typing import Any
 
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from qwen_vl_utils import process_vision_info
 from tqdm import tqdm
 from transformers import AutoProcessor, BitsAndBytesConfig, Qwen2_5_VLForConditionalGeneration
@@ -32,6 +33,7 @@ class Prediction:
     answer: list[int]
     raw_text: str
     parse_error: str | None
+    candidate_scores: list[dict[str, object]]
 
 
 def main() -> None:
@@ -112,6 +114,7 @@ def run_eval(args: argparse.Namespace, processor, model) -> None:
                 "no_ordering": no_ordering,
                 "raw_text": pred.raw_text,
                 "parse_error": pred.parse_error,
+                "candidate_scores": pred.candidate_scores,
             }
             out.write(json.dumps(record, ensure_ascii=False) + "\n")
             out.flush()
@@ -156,6 +159,7 @@ def run_infer(args: argparse.Namespace, processor, model) -> None:
                         "pred_answer": pred.answer,
                         "raw_text": pred.raw_text,
                         "parse_error": pred.parse_error,
+                        "candidate_scores": pred.candidate_scores,
                     },
                     ensure_ascii=False,
                 )
@@ -193,6 +197,9 @@ def predict_row(args: argparse.Namespace, processor, model, row: pd.Series, spli
     )
     inputs = inputs.to(input_device(model))
 
+    if args.prediction_method == "score":
+        return score_candidates(args, processor, model, prompt_text, image_inputs, video_inputs)
+
     with torch.inference_mode():
         generated_ids = model.generate(
             **inputs,
@@ -207,7 +214,88 @@ def predict_row(args: argparse.Namespace, processor, model, row: pd.Series, spli
         clean_up_tokenization_spaces=False,
     )[0].strip()
     answer, error = parse_prediction(raw_text)
-    return Prediction(answer=answer, raw_text=raw_text, parse_error=error)
+    return Prediction(answer=answer, raw_text=raw_text, parse_error=error, candidate_scores=[])
+
+
+def score_candidates(
+    args: argparse.Namespace,
+    processor,
+    model,
+    prompt_text: str,
+    image_inputs: list[Any],
+    video_inputs: list[Any],
+) -> Prediction:
+    prefix_inputs = processor(
+        text=[prompt_text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+    prefix_len = int(prefix_inputs.input_ids.shape[1])
+    device = input_device(model)
+    scored: list[dict[str, object]] = []
+
+    for start in range(0, len(PERMUTATIONS), args.candidate_batch_size):
+        batch_perms = PERMUTATIONS[start : start + args.candidate_batch_size]
+        full_texts = [prompt_text + candidate_answer_text(perm) for perm in batch_perms]
+        inputs = processor(
+            text=full_texts,
+            images=repeat_modal_inputs(image_inputs, len(batch_perms)),
+            videos=repeat_modal_inputs(video_inputs, len(batch_perms)),
+            padding=True,
+            return_tensors="pt",
+        )
+        labels = inputs.input_ids.clone()
+        labels[:, :prefix_len] = -100
+        labels[labels == processor.tokenizer.pad_token_id] = -100
+
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+        with torch.inference_mode():
+            outputs = model(**inputs)
+
+        losses, token_counts = candidate_mean_nll(outputs.logits, labels)
+        for perm, loss, n_tokens in zip(batch_perms, losses, token_counts):
+            scored.append(
+                {
+                    "answer": perm,
+                    "score": -float(loss),
+                    "mean_nll": float(loss),
+                    "tokens": int(n_tokens),
+                }
+            )
+
+    scored.sort(key=lambda item: float(item["score"]), reverse=True)
+    best = scored[0]
+    top_scores = scored[: args.report_top_k]
+    return Prediction(
+        answer=list(best["answer"]),
+        raw_text=candidate_answer_text(list(best["answer"])),
+        parse_error=None,
+        candidate_scores=top_scores,
+    )
+
+
+def repeat_modal_inputs(values: list[Any] | None, times: int) -> list[Any] | None:
+    if values is None:
+        return None
+    return values * times
+
+
+def candidate_mean_nll(logits: torch.Tensor, labels: torch.Tensor) -> tuple[list[float], list[int]]:
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+    token_losses = F.cross_entropy(
+        shift_logits.view(-1, shift_logits.size(-1)),
+        shift_labels.view(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).view(shift_labels.shape)
+    mask = shift_labels != -100
+    token_counts = mask.sum(dim=1).clamp_min(1)
+    losses = token_losses.sum(dim=1) / token_counts
+    return losses.detach().cpu().tolist(), token_counts.detach().cpu().tolist()
 
 
 def build_messages(image_paths: list[Path], sentence: str) -> list[dict[str, Any]]:
@@ -372,6 +460,7 @@ def write_eval_csv(records: list[dict[str, Any]], path: Path) -> None:
         "pred_answer",
         "correct",
         "raw_text",
+        "top_candidates",
         "sentence",
     ]
     with path.open("w", newline="", encoding="utf-8-sig") as f:
@@ -388,6 +477,7 @@ def write_eval_csv(records: list[dict[str, Any]], path: Path) -> None:
                     "pred_answer": format_answer(record["pred_answer"]),
                     "correct": record["correct"],
                     "raw_text": record["raw_text"],
+                    "top_candidates": format_candidate_scores(record.get("candidate_scores", [])),
                     "sentence": record["sentence"],
                 }
             )
@@ -408,6 +498,7 @@ def write_eval_html(records: list[dict[str, Any]], summary: dict[str, Any], path
             f"<td>{escape_text(format_answer(record['true_answer']))}</td>"
             f"<td>{escape_text(format_answer(record['pred_answer']))}</td>"
             f"<td><span class='{klass}'>{record['correct']}</span></td>"
+            f"<td>{escape_text(format_candidate_scores(record.get('candidate_scores', [])))}</td>"
             f"<td>{escape_text(record['raw_text'])}</td>"
             f"<td>{escape_text(record['sentence'])}</td>"
             "</tr>"
@@ -498,7 +589,7 @@ def write_eval_html(records: list[dict[str, Any]], summary: dict[str, Any], path
         <thead>
           <tr>
             <th>#</th><th>Id</th><th>No Ordering</th><th>True</th><th>Pred</th>
-            <th>Correct</th><th>Raw Output</th><th class="sentence">Sentence</th>
+            <th>Correct</th><th>Top Candidates</th><th>Raw Output</th><th class="sentence">Sentence</th>
           </tr>
         </thead>
         <tbody>{"".join(rows)}</tbody>
@@ -559,6 +650,19 @@ def format_answer(answer: list[int]) -> str:
     return "[" + ", ".join(str(x) for x in answer) + "]"
 
 
+def candidate_answer_text(answer: list[int]) -> str:
+    return '{"answer":' + format_answer(answer).replace(" ", "") + "}"
+
+
+def format_candidate_scores(candidate_scores: list[dict[str, object]]) -> str:
+    parts = []
+    for item in candidate_scores:
+        answer = format_answer(list(item["answer"]))
+        score = float(item["score"])
+        parts.append(f"{answer}: {score:.4f}")
+    return " | ".join(parts)
+
+
 def input_device(model) -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -598,6 +702,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-rows", type=int)
     parser.add_argument("--max-new-tokens", type=int, default=48)
+    parser.add_argument("--prediction-method", choices=["score", "generate"], default="score")
+    parser.add_argument("--candidate-batch-size", type=int, default=4)
+    parser.add_argument("--report-top-k", type=int, default=5)
     parser.add_argument("--load-in-4bit", action="store_true")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
