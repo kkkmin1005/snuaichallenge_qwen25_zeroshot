@@ -188,6 +188,10 @@ def predict_row(args: argparse.Namespace, processor, model, row: pd.Series, spli
     messages = build_messages(image_paths, str(row[args.sentence_col]))
     prompt_text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
+
+    if args.prediction_method == "score":
+        return score_candidates(args, processor, model, prompt_text, image_inputs, video_inputs)
+
     inputs = processor(
         text=[prompt_text],
         images=image_inputs,
@@ -196,9 +200,6 @@ def predict_row(args: argparse.Namespace, processor, model, row: pd.Series, spli
         return_tensors="pt",
     )
     inputs = inputs.to(input_device(model))
-
-    if args.prediction_method == "score":
-        return score_candidates(args, processor, model, prompt_text, image_inputs, video_inputs)
 
     with torch.inference_mode():
         generated_ids = model.generate(
@@ -703,7 +704,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rows", type=int)
     parser.add_argument("--max-new-tokens", type=int, default=48)
     parser.add_argument("--prediction-method", choices=["score", "generate"], default="score")
-    parser.add_argument("--candidate-batch-size", type=int, default=4)
+    parser.add_argument("--candidate-batch-size", type=int, default=1)
     parser.add_argument("--report-top-k", type=int, default=5)
     parser.add_argument("--load-in-4bit", action="store_true")
     parser.add_argument("--device-map", default="auto")
