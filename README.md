@@ -16,6 +16,14 @@ It reads the existing dataset from:
 cd /home/kangmin/snuaichallenge_qwen25_zeroshot
 python3 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
+pip install \
+  torch==2.6.0+cu124 \
+  torchvision==0.21.0+cu124 \
+  torchaudio==2.6.0+cu124 \
+  nvidia-cudnn-cu12==9.1.0.70 \
+  --extra-index-url https://download.pytorch.org/whl/cu124
+pip install --no-build-isolation autoawq==0.2.8
 pip install -r requirements.txt
 python3 scripts/check_env.py
 ```
@@ -26,10 +34,11 @@ The pinned GPU stack is aligned to the challenge server's CUDA 12.4 target:
 torch==2.6.0+cu124
 torchvision==0.21.0+cu124
 torchaudio==2.6.0+cu124
+nvidia-cudnn-cu12==9.1.0.70
 transformers==4.49.0
 accelerate==1.4.0
 bitsandbytes==0.46.0
-autoawq==0.2.9
+autoawq==0.2.8
 qwen-vl-utils[decord]==0.0.8
 ```
 
